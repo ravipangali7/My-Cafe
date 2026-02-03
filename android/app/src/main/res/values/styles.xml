@@ -15,4 +15,18 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+    
+    <!-- Theme for IncomingCallActivity - full-screen call-style UI 
+         Note: showWhenLocked, turnScreenOn, and keyguard dismissal are handled
+         programmatically in IncomingCallActivity.kt for broader API compatibility -->
+    <style name="CallActivityTheme" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <!-- Dark background matching the activity's gradient -->
+        <item name="android:windowBackground">@android:color/black</item>
+        <!-- Fullscreen with no title bar -->
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <!-- Translucent status/navigation for immersive experience -->
+        <item name="android:windowTranslucentStatus">true</item>
+        <item name="android:windowTranslucentNavigation">true</item>
+    </style>
 </resources>

@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "985119210614",
+    "project_id": "sewabyapar-e41b1",
+    "storage_bucket": "sewabyapar-e41b1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:985119210614:android:468d1fd57e9e21d05cb357",
+        "android_client_info": {
+          "package_name": "com.infelo.mycafe"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDRiGhcqQJ6ou6g3xImByhfFNMKDoNJZ7w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:985119210614:android:14e7afa126632f415cb357",
+        "android_client_info": {
+          "package_name": "com.infelo.sewabyapar"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDRiGhcqQJ6ou6g3xImByhfFNMKDoNJZ7w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:985119210614:android:6bf2c1e3255be0285cb357",
+        "android_client_info": {
+          "package_name": "com.sewabyapar.microfinance"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDRiGhcqQJ6ou6g3xImByhfFNMKDoNJZ7w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
