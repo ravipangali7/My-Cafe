@@ -197,6 +197,32 @@ class _WebViewScreenState extends State<WebViewScreen> {
               });
             }
 
+            // Disable text selection and copy in WebView
+            try {
+              await _controller.runJavaScript('''
+                (function() {
+                  function disableSelection() {
+                    var style = document.createElement('style');
+                    style.textContent = 'body, body *, html { -webkit-user-select: none !important; -moz-user-select: none !important; -ms-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; }';
+                    (document.head || document.documentElement).appendChild(style);
+                    document.body && (document.body.style.webkitUserSelect = 'none');
+                    document.body && (document.body.style.userSelect = 'none');
+                    document.documentElement.style.webkitUserSelect = 'none';
+                    document.documentElement.style.userSelect = 'none';
+                  }
+                  if (document.body) {
+                    disableSelection();
+                  } else {
+                    document.addEventListener('DOMContentLoaded', disableSelection);
+                  }
+                  document.addEventListener('copy', function(e) { e.preventDefault(); }, false);
+                  document.addEventListener('cut', function(e) { e.preventDefault(); }, false);
+                })();
+              ''');
+            } catch (e) {
+              print('Error disabling WebView selection: $e');
+            }
+
             // Inject JavaScript polyfills and configuration for FCM support
             // This ensures Notification API and service workers work properly in the webview
             try {

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'config/app_config.dart';
-import 'screens/splash_screen.dart';
+import 'screens/webview_screen.dart';
 import 'services/fcm_service.dart';
 
 void main() {
@@ -42,7 +42,7 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const SplashScreen(),
+      home: const WebViewScreen(),
     );
   }
 }
