@@ -6,13 +6,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
-import '../services/webview_service.dart';
 import '../services/session_service.dart';
 import '../services/fcm_service.dart';
 import '../utils/permissions_handler.dart';
-// NOTE: IncomingOrderOverlay removed - now using native Android IncomingCallActivity
+// NOTE: Incoming order: notification tap opens app; Flutter shows React order-alert page in WebView.
 
 /// Main WebView screen that displays the admin dashboard
 class WebViewScreen extends StatefulWidget {
@@ -22,9 +22,9 @@ class WebViewScreen extends StatefulWidget {
   State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+class _WebViewScreenState extends State<WebViewScreen>
+    with WidgetsBindingObserver {
   late final WebViewController _controller;
-  final WebViewService _webViewService = WebViewService();
   final FCMService _fcmService = FCMService();
   bool _isLoading = true;
   bool _fcmTokenSent =
@@ -33,12 +33,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeWebView();
     FCMService().handleInitialMessage();
-    Future.delayed(
-      const Duration(milliseconds: 600),
-      _checkPendingIncomingOrderFromPlatform,
-    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPendingIncomingOrderFromPlatform();
+    }
   }
 
   /// When app was opened from notification (background/killed), Android passes payload via method channel.
@@ -105,9 +109,36 @@ class _WebViewScreenState extends State<WebViewScreen> {
           await _controller.runJavaScript(
             "window.openOrderDetail && window.openOrderDetail('$escaped');",
           );
+          return;
         }
 
-        // NOTE: No longer showing Flutter overlay - native Android handles incoming order UI
+        // Incoming order (no action): open React order-alert page and inject payload
+        if (type == 'incoming_order' &&
+            orderId != null &&
+            action != 'accept' &&
+            action != 'reject') {
+          final baseUrl = AppConfig.dashboardUrl;
+          final orderAlertUrl =
+              '$baseUrl/order-alert?orderId=${Uri.encodeComponent(orderId)}';
+          final payload = <String, dynamic>{
+            'order_id': orderId,
+            'name': data['name'] ?? '',
+            'table_no': data['table_no'] ?? '',
+            'phone': data['phone'] ?? '',
+            'total': data['total'] ?? '',
+            'items_count': data['items_count'] ?? '',
+            'items': data['items'] ?? '',
+          };
+          final payloadJson = jsonEncode(payload);
+          final payloadEscaped = payloadJson
+              .replaceAll(r'\', r'\\')
+              .replaceAll('"', r'\"')
+              .replaceAll('\n', r'\n')
+              .replaceAll('\r', r'\r');
+          await _controller.runJavaScript(
+            'window.__INCOMING_ORDER__ = JSON.parse("$payloadEscaped"); window.location.href = "$orderAlertUrl";',
+          );
+        }
       }
     } catch (e) {
       print('[WebView] getPendingIncomingOrder error: $e');
@@ -195,6 +226,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   _registerFCMToken();
                 }
               });
+            }
+
+            // Run pending order check when dashboard is ready (cold start from notification)
+            if (isDashboardPage) {
+              _checkPendingIncomingOrderFromPlatform();
             }
 
             // Disable text selection and copy in WebView
@@ -375,7 +411,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       ..addJavaScriptChannel(
         'FileUpload',
         onMessageReceived: (JavaScriptMessage message) {
-          _handleFileUploadRequest();
+          _handleFileUploadRequest(message.message);
         },
       )
       ..addJavaScriptChannel(
@@ -385,6 +421,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
           print(
             '[FCM Channel] React acknowledged FCM token receipt: ${message.message}',
           );
+        },
+      )
+      ..addJavaScriptChannel(
+        'RequestFCMTokenForLogout',
+        onMessageReceived: (JavaScriptMessage message) async {
+          await _sendFCMTokenForLogoutToReact();
         },
       )
       ..addJavaScriptChannel(
@@ -415,8 +457,19 @@ class _WebViewScreenState extends State<WebViewScreen> {
           _openUrlInBrowser(message.message);
         },
       )
+      ..addJavaScriptChannel(
+        'StopOrderAlertSound',
+        onMessageReceived: (JavaScriptMessage message) async {
+          try {
+            const channel = MethodChannel('incoming_order');
+            await channel.invokeMethod<void>('stopOrderAlertSound');
+          } catch (e) {
+            print('[WebView] stopOrderAlertSound error: $e');
+          }
+        },
+      )
       ..setUserAgent(
-        'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 (WebView)',
       );
 
     // Restore cookies before loading
@@ -504,90 +557,116 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  Future<void> _handleFileUploadRequest() async {
-    // Show dialog to choose between camera and gallery (responsive width on mobile)
-    final screenWidth = MediaQuery.of(context).size.width;
-    final dialogWidth = (screenWidth * 0.9).clamp(280.0, 340.0);
-    final source = await showDialog<ImageSource>(
-      context: context,
-      builder: (context) => Center(
-        child: SizedBox(
-          width: dialogWidth,
-          child: AlertDialog(
-            title: const Text('Select Image Source'),
-            contentPadding: EdgeInsets.fromLTRB(24, 20, 24, 0),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.camera_alt),
-                    title: const Text('Camera'),
-                    onTap: () => Navigator.pop(context, ImageSource.camera),
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.photo_library),
-                    title: const Text('Gallery'),
-                    onTap: () => Navigator.pop(context, ImageSource.gallery),
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.insert_drive_file),
-                    title: const Text('File'),
-                    onTap: () => Navigator.pop(context, null),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-
-    if (source == null) {
-      // File picker
-      final result = await _webViewService.handleFileUpload(
-        controller: _controller,
+  /// Send FCM token to React for logout flow. React requests token via RequestFCMTokenForLogout
+  /// channel; we get the token and call window.__onFCMTokenForLogout__(token).
+  Future<void> _sendFCMTokenForLogoutToReact() async {
+    try {
+      final fcmToken = await _fcmService.getToken(maxRetries: 1);
+      final String js;
+      if (fcmToken != null && fcmToken.isNotEmpty) {
+        final escaped = fcmToken
+            .replaceAll(r'\', r'\\')
+            .replaceAll("'", r"\'")
+            .replaceAll('\n', r'\n')
+            .replaceAll('\r', r'\r');
+        js =
+            "window.__onFCMTokenForLogout__ && window.__onFCMTokenForLogout__('$escaped');";
+      } else {
+        js =
+            "window.__onFCMTokenForLogout__ && window.__onFCMTokenForLogout__(null);";
+      }
+      await _controller.runJavaScript(js);
+    } catch (e) {
+      print('[WebView] RequestFCMTokenForLogout error: $e');
+      await _controller.runJavaScript(
+        'window.__onFCMTokenForLogout__ && window.__onFCMTokenForLogout__(null);',
       );
-      if (result != null && result.files.isNotEmpty) {
-        _injectFileToWebView(result.files.first.path!);
-      }
-    } else if (source == ImageSource.camera) {
-      final image = await _webViewService.captureImageFromCamera();
-      if (image != null) {
-        _injectFileToWebView(image.path);
-      }
-    } else if (source == ImageSource.gallery) {
-      final image = await _webViewService.pickImageFromGallery();
-      if (image != null) {
-        _injectFileToWebView(image.path);
-      }
     }
   }
 
-  void _injectFileToWebView(String filePath) {
-    // Note: Direct file injection via JavaScript is not possible due to security restrictions.
-    // The file picker should be triggered by the WebView's native file input handler.
-    // This method is kept for potential future platform channel implementation.
+  /// Parse accept string (e.g. "image/*" or "image/*,application/pdf") into file extensions for FilePicker.
+  List<String> _acceptToExtensions(String? accept) {
+    if (accept == null || accept.isEmpty) {
+      return ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    }
+    final parts = accept.split(',').map((s) => s.trim().toLowerCase()).toList();
+    final extensions = <String>[];
+    for (final p in parts) {
+      if (p == 'image/*') {
+        extensions.addAll(['jpg', 'jpeg', 'png', 'gif', 'webp']);
+      } else if (p == 'application/pdf') {
+        extensions.add('pdf');
+      }
+    }
+    if (extensions.isEmpty) {
+      return ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    }
+    return extensions.toSet().toList();
+  }
+
+  static String _mimeFromExtension(String? extension) {
+    if (extension == null || extension.isEmpty)
+      return 'application/octet-stream';
+    final ext = extension.toLowerCase();
+    const map = {
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'webp': 'image/webp',
+      'pdf': 'application/pdf',
+    };
+    return map[ext] ?? 'application/octet-stream';
+  }
+
+  Future<void> _handleFileUploadRequest(String message) async {
+    // WebView flow: Web sends JSON { accept, field }. Pick file, return file data (base64 data URL) to React; React shows preview and uploads on Submit.
     try {
-      // Verify file exists before attempting to use it
-      final file = File(filePath);
-      if (!file.existsSync()) {
-        print('File does not exist: $filePath');
+      final Map<String, dynamic>? options =
+          jsonDecode(message) as Map<String, dynamic>?;
+      final accept = options?['accept'] as String? ?? 'image/*';
+      final field = options?['field'] as String? ?? 'logo';
+
+      await PermissionsHandler.requestFilePermissions();
+      final extensions = _acceptToExtensions(accept);
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: extensions,
+        allowMultiple: false,
+      );
+      if (result == null ||
+          result.files.isEmpty ||
+          result.files.single.path == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No file selected')));
+        }
         return;
       }
-
-      // For now, we rely on the WebView's native file picker
-      // which should be triggered automatically when a file input is clicked
-      _controller.runJavaScript('''
-        (function() {
-          const input = document.querySelector('input[type="file"]');
-          if (input) {
-            input.click();
-          }
-        })();
-      ''');
+      final filePath = result.files.single.path!;
+      final fileName = result.files.single.name;
+      final extension = result.files.single.extension;
+      final mimeType = _mimeFromExtension(extension);
+      final bytes = await File(filePath).readAsBytes();
+      final base64 = base64Encode(bytes);
+      final dataUrl = 'data:$mimeType;base64,$base64';
+      final payload = <String, String>{
+        'dataUrl': dataUrl,
+        'fileName': fileName,
+        'mimeType': mimeType,
+      };
+      final jsonStr = jsonEncode(payload);
+      await _controller.runJavaScript(
+        "window.__fileUploadCallback && window.__fileUploadCallback($jsonStr);",
+      );
     } catch (e) {
-      print('Error injecting file to WebView: $e');
+      print('FileUpload error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('File pick failed: $e')));
+      }
     }
   }
 
@@ -795,6 +874,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 }

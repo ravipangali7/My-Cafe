@@ -40,7 +40,7 @@ class _IncomingOrderOverlayState extends State<IncomingOrderOverlay> {
   Future<void> _startRingtone() async {
     try {
       await _player.setReleaseMode(ReleaseMode.loop);
-      await _player.setSource(AssetSource('sounds/ringtone.mp3'));
+      await _player.setSource(AssetSource('sounds/order_alert.mp3'));
       await _player.resume();
     } catch (e) {
       print('[IncomingOrder] Ringtone not available: $e');

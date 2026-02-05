@@ -81,6 +81,7 @@ class IncomingCallActivity : Activity() {
         const val EXTRA_ITEMS_COUNT = "items_count"
         const val EXTRA_ITEMS = "items" // JSON array of order items
         const val EXTRA_NOTIFICATION_ID = "notification_id"
+        const val EXTRA_ACTION_TOKEN = "action_token"
         
         // Slide thresholds
         private const val SLIDE_THRESHOLD_RATIO = 0.35f // 35% of bar width to trigger action
@@ -96,6 +97,7 @@ class IncomingCallActivity : Activity() {
     private var itemsJson: String = ""
     private var items: List<OrderItem> = emptyList()
     private var notificationId: Int = 0
+    private var actionToken: String? = null
 
     // Slide state
     private var slideOffset: Float = 0f
@@ -181,6 +183,7 @@ class IncomingCallActivity : Activity() {
             itemsCount = extras.getString(EXTRA_ITEMS_COUNT, "0") ?: "0"
             itemsJson = extras.getString(EXTRA_ITEMS, "") ?: ""
             notificationId = extras.getInt(EXTRA_NOTIFICATION_ID, 0)
+            actionToken = extras.getString(EXTRA_ACTION_TOKEN)
             
             // Parse items JSON
             items = parseItems(itemsJson)
@@ -771,6 +774,7 @@ class IncomingCallActivity : Activity() {
             action = OrderActionReceiver.ACTION_ACCEPT
             putExtra(OrderActionReceiver.EXTRA_ORDER_ID, orderId)
             putExtra(OrderActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            actionToken?.let { putExtra(OrderActionReceiver.EXTRA_ACTION_TOKEN, it) }
         }
         sendBroadcast(intent)
         
@@ -788,6 +792,7 @@ class IncomingCallActivity : Activity() {
             action = OrderActionReceiver.ACTION_REJECT
             putExtra(OrderActionReceiver.EXTRA_ORDER_ID, orderId)
             putExtra(OrderActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            actionToken?.let { putExtra(OrderActionReceiver.EXTRA_ACTION_TOKEN, it) }
         }
         sendBroadcast(intent)
         

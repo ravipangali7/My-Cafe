@@ -10,7 +10,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.VibrationEffect
@@ -151,8 +151,8 @@ class RingtoneService : Service() {
     }
 
     /**
-     * Starts playing the ringtone using ALARM audio stream for maximum volume.
-     * Sets volume to maximum and loops the ringtone continuously.
+     * Starts playing the custom order alert sound using ALARM audio stream for maximum volume.
+     * Uses app raw resource order_alert.mp3. Sets volume to maximum and loops until stopped.
      */
     private fun startRingtone() {
         try {
@@ -164,12 +164,9 @@ class RingtoneService : Service() {
             val maxVolume = audioManager?.getStreamMaxVolume(AudioManager.STREAM_ALARM) ?: 7
             audioManager?.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
             
-            // Get ringtone URI - use alarm sound for louder alert
-            val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            
-            Log.d(TAG, "Starting ringtone with URI: $ringtoneUri")
+            // Custom order alert sound from app raw resources
+            val alertUri = Uri.parse("android.resource://$packageName/${R.raw.order_alert}")
+            Log.d(TAG, "Starting custom order alert with URI: $alertUri")
             
             // Create and configure MediaPlayer with ALARM audio stream
             mediaPlayer = MediaPlayer().apply {
@@ -179,15 +176,15 @@ class RingtoneService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
-                setDataSource(this@RingtoneService, ringtoneUri)
+                setDataSource(this@RingtoneService, alertUri)
                 isLooping = true // Loop until stopped
                 prepare()
                 start()
             }
             
-            Log.d(TAG, "Ringtone started successfully")
+            Log.d(TAG, "Order alert started successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting ringtone: ${e.message}", e)
+            Log.e(TAG, "Error starting order alert: ${e.message}", e)
         }
     }
 
