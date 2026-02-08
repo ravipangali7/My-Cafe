@@ -39,11 +39,20 @@ class RingtoneService : Service() {
         const val EXTRA_ORDER_ID = "order_id"
         const val EXTRA_CUSTOMER_NAME = "customer_name"
         
+        /** True while ringtone is playing; used so we don't restart sound when more orders arrive. */
+        @Volatile
+        var isPlaying: Boolean = false
+            private set
+        
+        internal fun markPlaying() { isPlaying = true }
+        internal fun markStopped() { isPlaying = false }
+        
         // Vibration pattern: wait, vibrate, pause, vibrate, pause, vibrate (repeating)
         private val VIBRATION_PATTERN = longArrayOf(0, 1000, 500, 1000, 500, 1000)
         
         /**
-         * Helper to start the ringtone service
+         * Helper to start the ringtone service.
+         * If the service is already running and playing, a new intent just updates the notification.
          */
         fun start(context: Context, orderId: String, customerName: String) {
             val intent = Intent(context, RingtoneService::class.java).apply {
@@ -79,10 +88,18 @@ class RingtoneService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "RingtoneService onStartCommand")
-        
         val orderId = intent?.getStringExtra(EXTRA_ORDER_ID) ?: ""
         val customerName = intent?.getStringExtra(EXTRA_CUSTOMER_NAME) ?: "Customer"
+        
+        // If already playing (e.g. another order arrived), only update notification; do not restart sound
+        if (isPlaying && mediaPlayer != null && mediaPlayer?.isPlaying == true) {
+            Log.d(TAG, "RingtoneService already playing, updating notification for order #$orderId")
+            val notification = createForegroundNotification(orderId, customerName)
+            startForeground(NOTIFICATION_ID, notification)
+            return START_NOT_STICKY
+        }
+        
+        Log.d(TAG, "RingtoneService onStartCommand")
         
         // Start as foreground service with notification
         val notification = createForegroundNotification(orderId, customerName)
@@ -181,7 +198,7 @@ class RingtoneService : Service() {
                 prepare()
                 start()
             }
-            
+            RingtoneService.markPlaying()
             Log.d(TAG, "Order alert started successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Error starting order alert: ${e.message}", e)
@@ -193,6 +210,7 @@ class RingtoneService : Service() {
      */
     private fun stopRingtone() {
         try {
+            RingtoneService.markStopped()
             mediaPlayer?.apply {
                 if (isPlaying) {
                     stop()

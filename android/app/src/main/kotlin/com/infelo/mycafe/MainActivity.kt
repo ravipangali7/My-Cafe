@@ -1,6 +1,9 @@
 package com.infelo.mycafe
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.webkit.WebChromeClient
@@ -16,13 +19,34 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "incoming_order"
         private var pendingIncomingOrderData: Map<String, String>? = null
+
+        /** Set by onResume/onPause so FCM service knows whether to open order-alert immediately (foreground) or wait for notification tap (background). */
+        @Volatile
+        var isAppInForeground: Boolean = false
+            private set
+
+        internal fun setAppInForeground(value: Boolean) {
+            isAppInForeground = value
+        }
+
+        var incomingOrderMethodChannel: MethodChannel? = null
+            private set
+
+        internal fun setIncomingOrderMethodChannel(channel: MethodChannel?) {
+            incomingOrderMethodChannel = channel
+        }
     }
+
+    private var foregroundOrderReceiver: BroadcastReceiver? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        setIncomingOrderMethodChannel(channel)
+
         // Pass incoming order payload and stop order alert sound
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getPendingIncomingOrder" -> {
                     val data = pendingIncomingOrderData
@@ -49,12 +73,60 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         captureIncomingOrderExtras(intent)
+        registerForegroundOrderReceiver()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        setAppInForeground(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        setAppInForeground(false)
+    }
+
+    override fun onDestroy() {
+        unregisterForegroundOrderReceiver()
+        setIncomingOrderMethodChannel(null)
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         captureIncomingOrderExtras(intent)
+    }
+
+    private fun registerForegroundOrderReceiver() {
+        if (foregroundOrderReceiver != null) return
+        foregroundOrderReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != MyCafeFirebaseMessagingService.ACTION_INCOMING_ORDER_FOREGROUND) return
+                val payload = HashMap<String, Any?>()
+                intent.extras?.keySet()?.forEach { key ->
+                    intent.extras?.get(key)?.let { value -> payload[key] = value.toString() }
+                }
+                runOnUiThread {
+                    incomingOrderMethodChannel?.invokeMethod("onIncomingOrder", payload)
+                }
+            }
+        }
+        val filter = IntentFilter(MyCafeFirebaseMessagingService.ACTION_INCOMING_ORDER_FOREGROUND)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(foregroundOrderReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(foregroundOrderReceiver, filter)
+        }
+    }
+
+    private fun unregisterForegroundOrderReceiver() {
+        foregroundOrderReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {}
+            foregroundOrderReceiver = null
+        }
     }
 
     /**

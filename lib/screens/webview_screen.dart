@@ -145,6 +145,38 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
+  /// Opens the React order-alert page with the given payload (from native when app is in foreground).
+  Future<void> _openOrderAlertWithPayload(Map<String, dynamic> data) async {
+    if (!mounted) return;
+    try {
+      final orderId = data['order_id'] as String?;
+      if (orderId == null || orderId.isEmpty) return;
+      final baseUrl = AppConfig.dashboardUrl;
+      final orderAlertUrl =
+          '$baseUrl/order-alert?orderId=${Uri.encodeComponent(orderId)}';
+      final payload = <String, dynamic>{
+        'order_id': orderId,
+        'name': data['name'] ?? '',
+        'table_no': data['table_no'] ?? '',
+        'phone': data['phone'] ?? '',
+        'total': data['total'] ?? '',
+        'items_count': data['items_count'] ?? '',
+        'items': data['items'] ?? '',
+      };
+      final payloadJson = jsonEncode(payload);
+      final payloadEscaped = payloadJson
+          .replaceAll(r'\', r'\\')
+          .replaceAll('"', r'\"')
+          .replaceAll('\n', r'\n')
+          .replaceAll('\r', r'\r');
+      await _controller.runJavaScript(
+        'window.__INCOMING_ORDER__ = JSON.parse("$payloadEscaped"); window.location.href = "$orderAlertUrl";',
+      );
+    } catch (e) {
+      print('[WebView] _openOrderAlertWithPayload error: $e');
+    }
+  }
+
   Future<void> _initializeWebView() async {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -467,7 +499,22 @@ class _WebViewScreenState extends State<WebViewScreen>
             print('[WebView] stopOrderAlertSound error: $e');
           }
         },
-      )
+      );
+
+    // When app is in foreground, native invokes onIncomingOrder so we open order-alert immediately
+    if (Platform.isAndroid) {
+      const incomingChannel = MethodChannel('incoming_order');
+      incomingChannel.setMethodCallHandler((MethodCall call) async {
+        if (call.method == 'onIncomingOrder' && call.arguments != null) {
+          await _openOrderAlertWithPayload(
+            Map<String, dynamic>.from(call.arguments as Map),
+          );
+        }
+        return null;
+      });
+    }
+
+    _controller
       ..setUserAgent(
         'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 (WebView)',
       );
@@ -835,12 +882,13 @@ class _WebViewScreenState extends State<WebViewScreen>
             onRefresh: _onRefresh,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                return ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: constraints.maxHeight,
-                    maxWidth: constraints.maxWidth,
-                  ),
-                  child: SizedBox.expand(
+                final viewportHeight = constraints.maxHeight;
+                final viewportWidth = constraints.maxWidth;
+                return SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: SizedBox(
+                    height: viewportHeight,
+                    width: viewportWidth,
                     child: Stack(
                       children: [
                         Positioned.fill(

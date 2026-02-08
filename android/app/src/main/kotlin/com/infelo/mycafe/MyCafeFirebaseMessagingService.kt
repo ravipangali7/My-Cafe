@@ -66,25 +66,32 @@ class MyCafeFirebaseMessagingService : FlutterFirebaseMessagingService() {
 
     /**
      * Handles incoming order FCM message.
-     * Starts ringtone and shows a large notification (no accept/reject buttons).
-     * Tapping the notification opens MainActivity with full order payload so Flutter
-     * can show the React order-alert page in WebView. Sound continues until Flutter
-     * calls stopOrderAlertSound after the vendor accepts/rejects in the app.
+     * - If app is in foreground: start ringtone (if not playing), broadcast payload so Flutter opens order-alert immediately; optional minimal notification.
+     * - If app is in background: start ringtone (if not playing), show notification; user opens order-alert on tap.
      */
     private fun handleIncomingOrder(payload: Map<String, String>) {
         val orderId = payload["order_id"] ?: ""
         val customerName = payload["name"] ?: "Customer"
         
-        Log.d(TAG, "Incoming order received: #$orderId from $customerName")
+        Log.d(TAG, "Incoming order received: #$orderId from $customerName, foreground=${MainActivity.isAppInForeground}")
         
-        // Create notification channel (required for Android O+)
         createIncomingOrderChannel()
         
-        // Start ringtone service for loud alarm sound (plays until Flutter stops it)
+        // Start ringtone only if not already playing (play once)
         RingtoneService.start(this, orderId, customerName)
         
-        // Show notification only (no full-screen activity). Tap opens MainActivity with payload.
-        showIncomingOrderNotification(payload)
+        if (MainActivity.isAppInForeground) {
+            // Deliver to running app so WebView opens order-alert immediately
+            val intent = Intent(ACTION_INCOMING_ORDER_FOREGROUND).apply {
+                payload.forEach { (k, v) -> putExtra(k, v) }
+            }
+            sendBroadcast(intent)
+            // Optionally show a low-priority notification so user sees something if they missed the auto-open
+            showIncomingOrderNotification(payload)
+        } else {
+            // Background: show notification; user taps to open
+            showIncomingOrderNotification(payload)
+        }
     }
 
     /**
@@ -210,6 +217,9 @@ class MyCafeFirebaseMessagingService : FlutterFirebaseMessagingService() {
 
     companion object {
         private const val TAG = "MyCafeFCM"
+        
+        /** Broadcast action: app is in foreground; deliver order payload so Flutter can open order-alert page. */
+        const val ACTION_INCOMING_ORDER_FOREGROUND = "com.infelo.mycafe.INCOMING_ORDER_FOREGROUND"
         
         // Notification channel ID
         private const val CHANNEL_ID = "incoming_order_v3"
