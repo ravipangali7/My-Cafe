@@ -59,6 +59,9 @@ dependencies:
   # HTTP client for API calls
   http: ^1.1.2
 
+  # Real-time connectivity for no-internet banner
+  connectivity_plus: ^6.0.5
+
   # Incoming order alert: ringtone and vibration
   audioplayers: ^6.0.0
   vibration: ^2.0.0

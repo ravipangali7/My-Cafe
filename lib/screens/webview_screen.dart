@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -14,6 +17,140 @@ import '../services/fcm_service.dart';
 import '../utils/permissions_handler.dart';
 // NOTE: Incoming order: notification tap opens app; Flutter shows React order-alert page in WebView.
 
+/// Pull-to-refresh helper for WebView: triggers refresh only when at top and pull-down
+/// exceeds threshold. Does not use a wrapping scroll view so WebView scroll is not blocked.
+class _WebViewPullToRefreshHelper {
+  _WebViewPullToRefreshHelper({required WebViewController controller})
+      : _controller = controller;
+
+  final WebViewController _controller;
+
+  Completer<void> _completer = Completer<void>()..complete();
+  int _loadingStartMs = 0;
+  static const int _exceedsLoadingTimeMs = 3000;
+
+  void started() {
+    _loadingStartMs = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  void finished() {
+    _loadingStartMs = 0;
+    if (!_completer.isCompleted) {
+      _completer.complete();
+    }
+  }
+
+  Future<void> refresh() {
+    if (!_completer.isCompleted) {
+      _completer.complete();
+    }
+    _completer = Completer<void>();
+    started();
+    _controller.reload();
+    return _completer.future;
+  }
+
+  bool get _isLoading =>
+      _loadingStartMs > 0 &&
+      (DateTime.now().millisecondsSinceEpoch - _loadingStartMs) < _exceedsLoadingTimeMs;
+
+  Future<bool> _isAtTop() async {
+    try {
+      final result = await _controller.runJavaScriptReturningResult(
+        '(document.documentElement.scrollTop || window.scrollY)',
+      );
+      final num value =
+          result is num ? result : num.tryParse(result.toString()) ?? -1;
+      return value <= 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  OneSequenceGestureRecognizer createRecognizer(
+    double threshold,
+    VoidCallback onTriggerRefresh,
+  ) {
+    return _WebViewPullToRefreshGestureRecognizer(
+      refreshThreshold: threshold,
+      isAtTop: _isAtTop,
+      isLoading: () => _isLoading,
+      onTriggerRefresh: onTriggerRefresh,
+    );
+  }
+}
+
+/// Custom vertical drag recognizer for pull-to-refresh on WebView.
+/// Only activates when page is at top; does not block WebView scroll (rejectGesture -> acceptGesture).
+class _WebViewPullToRefreshGestureRecognizer extends VerticalDragGestureRecognizer {
+  _WebViewPullToRefreshGestureRecognizer({
+    required double refreshThreshold,
+    required Future<bool> Function() isAtTop,
+    required bool Function() isLoading,
+    required VoidCallback onTriggerRefresh,
+  })  : _refreshThreshold = refreshThreshold,
+        _isAtTop = isAtTop,
+        _isLoading = isLoading,
+        _onTriggerRefresh = onTriggerRefresh {
+    super.onStart = _onStart;
+    super.onUpdate = _onUpdate;
+    super.onEnd = _onEnd;
+    super.onCancel = _onCancel;
+  }
+
+  final double _refreshThreshold;
+  final Future<bool> Function() _isAtTop;
+  final bool Function() _isLoading;
+  final VoidCallback _onTriggerRefresh;
+
+  bool _dragStarted = false;
+  double _dragDistance = 0;
+
+  @override
+  void rejectGesture(int pointer) {
+    acceptGesture(pointer);
+  }
+
+  void _onStart(DragStartDetails details) {
+    if (!_isLoading()) {
+      _isAtTop().then((atTop) {
+        if (atTop) {
+          _dragStarted = true;
+          _dragDistance = 0;
+        }
+      });
+    } else {
+      _dragStarted = false;
+    }
+  }
+
+  void _onUpdate(DragUpdateDetails details) {
+    if (!_dragStarted) return;
+    final dy = details.delta.dy;
+    if (dy > 0) {
+      _dragDistance += dy;
+      if (_dragDistance > _refreshThreshold) {
+        _dragStarted = false;
+        _dragDistance = 0;
+        _onTriggerRefresh();
+      }
+    } else {
+      _dragStarted = false;
+      _dragDistance = 0;
+    }
+  }
+
+  void _onEnd(DragEndDetails details) {
+    _dragStarted = false;
+    _dragDistance = 0;
+  }
+
+  void _onCancel() {
+    _dragStarted = false;
+    _dragDistance = 0;
+  }
+}
+
 /// Main WebView screen that displays the admin dashboard
 class WebViewScreen extends StatefulWidget {
   const WebViewScreen({super.key});
@@ -25,6 +162,9 @@ class WebViewScreen extends StatefulWidget {
 class _WebViewScreenState extends State<WebViewScreen>
     with WidgetsBindingObserver {
   late final WebViewController _controller;
+  late final _WebViewPullToRefreshHelper _pullToRefreshHelper;
+  final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
+      GlobalKey<RefreshIndicatorState>();
   final FCMService _fcmService = FCMService();
   bool _isLoading = true;
   bool _fcmTokenSent =
@@ -35,6 +175,7 @@ class _WebViewScreenState extends State<WebViewScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeWebView();
+    _pullToRefreshHelper = _WebViewPullToRefreshHelper(controller: _controller);
     FCMService().handleInitialMessage();
   }
 
@@ -187,6 +328,7 @@ class _WebViewScreenState extends State<WebViewScreen>
             setState(() {
               _isLoading = true;
             });
+            _pullToRefreshHelper.started();
             SessionService.saveLastUrl(url);
 
             // Inject Notification API polyfill early, before page content loads
@@ -234,6 +376,7 @@ class _WebViewScreenState extends State<WebViewScreen>
             setState(() {
               _isLoading = false;
             });
+            _pullToRefreshHelper.finished();
             // Save cookies after page loads
             try {
               final uri = Uri.parse(url);
@@ -414,6 +557,7 @@ class _WebViewScreenState extends State<WebViewScreen>
             setState(() {
               _isLoading = false;
             });
+            _pullToRefreshHelper.finished();
           },
           onNavigationRequest: (NavigationRequest request) async {
             final uri = Uri.tryParse(request.url);
@@ -812,10 +956,6 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
-  Future<void> _onRefresh() async {
-    await _controller.reload();
-  }
-
   /// Asks the web app to handle back (in-app history). Web calls RequestExit when at root.
   Future<void> _handleBackButton() async {
     await _controller.runJavaScript(
@@ -879,38 +1019,42 @@ class _WebViewScreenState extends State<WebViewScreen>
       child: Scaffold(
         body: SafeArea(
           child: RefreshIndicator(
-            onRefresh: _onRefresh,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final viewportHeight = constraints.maxHeight;
-                final viewportWidth = constraints.maxWidth;
-                return SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  child: SizedBox(
-                    height: viewportHeight,
-                    width: viewportWidth,
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: WebViewWidget(controller: _controller),
-                        ),
-                        if (_isLoading)
-                          Positioned.fill(
-                            child: Container(
-                              color: Colors.white,
-                              child: const Center(
-                                child: CircularProgressIndicator(
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.brown,
-                                  ),
-                                ),
+            key: _refreshIndicatorKey,
+            onRefresh: () => _pullToRefreshHelper.refresh(),
+            child: Builder(
+              builder: (context) {
+                final threshold =
+                    MediaQuery.sizeOf(context).height * 0.2;
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: WebViewWidget(
+                        controller: _controller,
+                        gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+                          Factory<OneSequenceGestureRecognizer>(
+                            () => _pullToRefreshHelper.createRecognizer(
+                              threshold,
+                              () => _refreshIndicatorKey.currentState?.show(),
+                            ),
+                          ),
+                        },
+                      ),
+                    ),
+                    if (_isLoading)
+                      Positioned.fill(
+                        child: Container(
+                          color: Colors.white,
+                          child: const Center(
+                            child: CircularProgressIndicator(
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.brown,
                               ),
                             ),
                           ),
-                        // NOTE: IncomingOrderOverlay removed - native Android IncomingCallActivity handles incoming order UI
-                      ],
-                    ),
-                  ),
+                        ),
+                      ),
+                    // NOTE: IncomingOrderOverlay removed - native Android IncomingCallActivity handles incoming order UI
+                  ],
                 );
               },
             ),

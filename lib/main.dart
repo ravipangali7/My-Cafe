@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'config/app_config.dart';
+import 'screens/no_internet_screen.dart';
 import 'screens/webview_screen.dart';
+import 'services/connectivity_service.dart';
 import 'services/fcm_service.dart';
 
 void main() {
@@ -43,6 +45,18 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: const WebViewScreen(),
+      builder: (context, child) {
+        final service = ConnectivityService.instance;
+        return StreamBuilder<bool>(
+          stream: service.connectivityStream,
+          initialData: service.isOnline,
+          builder: (context, snapshot) {
+            final isOnline = snapshot.data ?? true;
+            if (isOnline && child != null) return child;
+            return const NoInternetScreen();
+          },
+        );
+      },
     );
   }
 }
